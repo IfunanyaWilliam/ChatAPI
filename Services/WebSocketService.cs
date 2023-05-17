@@ -1,20 +1,42 @@
-﻿using System.Collections.Concurrent;
+﻿using ChatAPI.Core;
+using ChatAPI.Repositories;
+using Newtonsoft.Json;
+using System.Collections.Concurrent;
+using System.Linq;
+using System.Net.Sockets;
 using System.Net.WebSockets;
 using System.Text;
-using Newtonsoft.Json;
-using ChatAPI.Repositories;
 
-namespace ChatAPI.Core
+namespace ChatAPI.Services
 {
-    public class WebSocketHandler
+    public class WebSocketChatService : IWebSocketChatService
     {
+        private readonly IMessageRepository _messageRepository;
         private readonly ConcurrentDictionary<Guid, WebSocket> _sockets = new ConcurrentDictionary<Guid, WebSocket>();
         private readonly ConcurrentDictionary<Guid, Guid> _socketThreads = new ConcurrentDictionary<Guid, Guid>();
-        private readonly IMessageRepository _messageRepository;
 
-        public WebSocketHandler(IMessageRepository messageRepository)
+        public WebSocketChatService(IMessageRepository messageRepository)
         {
             _messageRepository = messageRepository;
+        }
+
+        public async Task StartAsync(CancellationToken cancellationToken)
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                var messages = await _messageRepository.GetMessagesAsync();
+                var threads = messages.Select(m => m.ThreadId).Distinct();
+
+                foreach (var thread in threads)
+                {
+                    var chatMessages = messages.Where(m => m.ThreadId == thread).ToList();
+                    var chatMessagesJson = JsonConvert.SerializeObject(chatMessages);
+
+                    await BroadcastAsync(thread, chatMessagesJson);
+                }
+
+                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+            }
         }
 
         public async Task HandleWebSocketRequest(HttpContext context, WebSocket webSocket)
@@ -86,5 +108,6 @@ namespace ChatAPI.Core
         {
             context.Items["ThreadId"] = threadId;
         }
+
     }
 }
